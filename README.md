@@ -38,6 +38,8 @@ An advanced, scalable **Playwright end-to-end test automation framework** built 
 | 📸 **Debugging Artifacts** | Screenshots on failure, video recording, and traces enabled by default |
 | 🔁 **Parallel Execution & Retries** | Fully parallel tests locally; automatic retries (2x) in CI |
 | 🤖 **GitHub Actions CI** | Automated test runs on push/pull requests to `main`/`master` |
+| 🧠 **AI-Powered Analysis** | Root cause analysis and flaky test detection using LLM agents |
+| 📋 **Custom TTA Report** | Rich HTML report with AI tabs, filtering, video/trace playback |
 
 ---
 
@@ -68,13 +70,35 @@ AdvancePlaywrightFramework/
 ├── docs/                         # Project documentation
 ├── rules/                        # Coding/testing rules and guidelines
 ├── src/
+│   ├── ai/                       # AI-powered test analysis agents
+│   │   ├── agents/
+│   │   │   ├── flakyAnalyzer.ts  # Flaky test detection across builds
+│   │   │   └── rcaAgent.ts       # Root cause analysis for failures
+│   │   └── config/
+│   │       └── providers.ts      # LLM API key detection
 │   ├── api/                      # API clients & request helpers
 │   ├── config/                   # Environment & app configuration
 │   ├── fixtures/                 # Custom Playwright fixtures
 │   ├── pages/                    # Page Object Model classes
+│   │   ├── BasePage.ts           # Abstract base class for all pages
+│   │   ├── LoginPage.ts          # Login page interactions
+│   │   ├── CartPage.ts           # Shopping cart page
+│   │   ├── InventoryPage.ts      # Product listing/inventory page
+│   │   ├── ItemDetailsPage.ts    # Single product detail page
+│   │   ├── CheckoutStepOnePage.ts # Checkout customer info form
+│   │   ├── CheckoutStepTwoPage.ts # Checkout order overview
+│   │   └── CheckoutCompletePage.ts # Order confirmation page
 │   ├── testdata/                 # Test data files (Excel, CSV, JSON)
 │   ├── tests/                    # Test specs (Playwright testDir)
+│   │   └── Login.spec.ts         # Login flow test
 │   └── utils/                    # Helpers, logger, custom reporter, etc.
+│       ├── CustomReporter.ts     # Rich HTML report generator with AI tabs
+│       ├── DataGenerator.ts      # Faker-based test data generation
+│       ├── UtilElementLocator.ts # Element action wrapper with logging
+│       └── logger.ts             # Winston-based structured logging
+├── logs/                         # Winston log output (combined.log)
+├── reports/                      # Build snapshots for flaky analysis
+├── tta-report/                   # Generated HTML reports
 ├── .env                          # Local environment variables (not for prod secrets!)
 ├── playwright.config.ts          # Playwright configuration
 ├── tsconfig.json                 # TypeScript configuration
@@ -227,10 +251,13 @@ After a run, the following artifacts are produced:
 | Artifact | Location | Notes |
 |---|---|---|
 | **HTML Report** | `playwright-report/index.html` | Open with `npx playwright show-report` |
+| **Custom TTA Report** | `tta-report/report_<timestamp>.html` | Rich report with AI analysis tabs |
 | **Traces** | `test-results/` | View with `npx playwright show-trace <trace-file>` |
 | **Screenshots** | `test-results/` | Captured automatically on failure |
 | **Videos** | `test-results/` | Recorded for every test |
 | **Allure Results** | `allure-results/` | Generate/view with the Allure CLI if installed |
+| **Logs** | `logs/combined.log` | Winston structured logs |
+| **Build Snapshots** | `reports/` | Used by flaky analyzer for cross-build comparison |
 
 Useful report commands:
 
@@ -262,6 +289,134 @@ The pipeline is defined in [`.github/workflows/playwright.yml`](.github/workflow
 
 ---
 
+## Page Objects
+
+The framework follows the **Page Object Model (POM)** pattern with a shared base class:
+
+| Page Object | File | Description |
+|---|---|---|
+| `BasePage` | `src/pages/BasePage.ts` | Abstract base class providing `page`, `el` (element locator), `log` (logger), and `goto()` helper |
+| `LoginPage` | `src/pages/LoginPage.ts` | Login screen interactions (fill credentials, submit) |
+| `CartPage` | `src/pages/CartPage.ts` | Shopping cart operations |
+| `InventoryPage` | `src/pages/InventoryPage.ts` | Product listing page |
+| `ItemDetailsPage` | `src/pages/ItemDetailsPage.ts` | Single product detail view |
+| `CheckoutStepOnePage` | `src/pages/CheckoutStepOnePage.ts` | Checkout customer info form |
+| `CheckoutStepTwoPage` | `src/pages/CheckoutStepTwoPage.ts` | Checkout order review |
+| `CheckoutCompletePage` | `src/pages/CheckoutCompletePage.ts` | Order confirmation page |
+
+### Creating a New Page Object
+
+```typescript
+import { BasePage } from './BasePage';
+
+export class MyPage extends BasePage {
+  static PATH = '/my-page';
+
+  // Define locators
+  private heading = this.el.locator('[data-test="heading"]');
+
+  async open() {
+    await this.goto(MyPage.PATH);
+  }
+
+  async getHeadingText(): Promise<string> {
+    return await this.heading.getText();
+  }
+}
+```
+
+---
+
+## Utilities
+
+### UtilElementLocator
+
+A reusable action-wrapper that adds logging and consistent timeout handling to Playwright locators.
+
+| Method | Description |
+|---|---|
+| `click()` | Click an element |
+| `fill(value)` | Clear and fill an input |
+| `getText()` | Get visible text content |
+| `isVisible()` | Check element visibility |
+| `selectByText(text)` | Select dropdown option by text |
+| `waitForVisible()` | Wait for element to appear |
+| ... | And many more (doubleClick, hover, press, etc.) |
+
+### DataGenerator
+
+Faker-based fake data generation for tests:
+
+```typescript
+import DataGenerator from '@utils/DataGenerator';
+
+const creds = DataGenerator.credentials();      // { username, password }
+const customer = DataGenerator.checkoutCustomer(); // { firstName, lastName, email, ... }
+const profile = DataGenerator.userProfile();     // Full user profile object
+```
+
+### Logger (Winston)
+
+Structured, scoped logging throughout the framework:
+
+```typescript
+import { createLogger } from '@utils/logger';
+
+const log = createLogger('MyTestClass');
+log.info('Test started');
+log.error('Something failed', { error });
+```
+
+Logs are written to both console (colorized) and `logs/combined.log`.
+
+### Custom Reporter
+
+A rich HTML report generator that produces self-contained reports in `tta-report/` with:
+- Real-time updates during test execution
+- Stats dashboard (total, passed, failed, skipped, pass rate)
+- Filterable test results table
+- Screenshot/video/trace playback
+- **AI-powered tabs** (see below)
+
+---
+
+## AI-Powered Test Analysis
+
+The framework includes an AI layer for intelligent test failure analysis:
+
+### Root Cause Analysis (RCA)
+
+Analyzes test failures and provides:
+- **Severity** assessment (low/medium/high/critical)
+- **Priority** level (P0/P1/P2/P3)
+- **Root cause** identification
+- **Fix suggestions**
+
+Located in `src/ai/agents/rcaAgent.ts`.
+
+### Flaky Test Analyzer
+
+Compares test results across consecutive builds to:
+- Detect flaky tests (tests that change status between runs)
+- Count flaky/failing tests
+- Identify specific flaky test names
+
+Located in `src/ai/agents/flakyAnalyzer.ts`.
+
+### LLM Integration
+
+The AI agents are designed to work with LLM APIs. Set one of these environment variables to enable:
+
+```env
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=...
+```
+
+When no API key is present, the agents return placeholder results. With an API key, they can generate intelligent analysis of test failures.
+
+---
+
 ## Best Practices & Conventions
 
 - Keep page interactions inside **Page Object** classes under `src/pages`; keep assertions and flows in specs under `src/tests`.
@@ -271,3 +426,4 @@ The pipeline is defined in [`.github/workflows/playwright.yml`](.github/workflow
 - Validate API response shapes with **Ajv** JSON schemas.
 - Use `winston` logging instead of raw `console.log` for consistent, leveled logs.
 - Add new environment URLs to `.env` rather than hard-coding them in tests.
+- Extend `BasePage` when creating new page objects for consistent logging and element actions.
